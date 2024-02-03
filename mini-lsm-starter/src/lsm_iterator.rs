@@ -1,7 +1,7 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
+use std::ops::Bound;
 
 use anyhow::{bail, Result};
+use bytes::Bytes;
 
 use crate::{
     iterators::{merge_iterator::MergeIterator, StorageIterator},
@@ -13,15 +13,41 @@ type LsmIteratorInner = MergeIterator<MemTableIterator>;
 
 pub struct LsmIterator {
     inner: LsmIteratorInner,
+    end_bound: Bound<Bytes>,
     is_valid: bool,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner) -> Result<Self> {
-        Ok(Self {
+    pub(crate) fn new(iter: LsmIteratorInner, end_bound: Bound<Bytes>) -> Result<Self> {
+        let mut iter = Self {
             is_valid: iter.is_valid(),
             inner: iter,
-        })
+            end_bound,
+        };
+        iter.move_to_non_delete()?;
+        Ok(iter)
+    }
+
+    fn next_inner(&mut self) -> Result<()> {
+        self.inner.next()?;
+        if !self.inner.is_valid() {
+            self.is_valid = false;
+            return Ok(());
+        }
+
+        match &self.end_bound {
+            Bound::Unbounded => {}
+            Bound::Excluded(key) => self.is_valid = self.inner.key().raw_ref() < key.as_ref(),
+            Bound::Included(key) => self.is_valid = self.inner.key().raw_ref() <= key.as_ref(),
+        }
+        Ok(())
+    }
+
+    fn move_to_non_delete(&mut self) -> Result<()> {
+        while self.is_valid() && self.inner.value().is_empty() {
+            self.next_inner()?;
+        }
+        Ok(())
     }
 }
 
@@ -41,9 +67,13 @@ impl StorageIterator for LsmIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        self.inner.next()?;
-        self.is_valid = self.inner.is_valid();
+        self.next_inner()?;
+        self.move_to_non_delete()?;
         Ok(())
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        self.inner.num_active_iterators()
     }
 }
 
@@ -68,7 +98,7 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
     type KeyType<'a> = I::KeyType<'a> where Self: 'a;
 
     fn is_valid(&self) -> bool {
-        !self.has_errored && self.is_valid()
+        !self.has_errored && self.iter.is_valid()
     }
 
     fn key(&self) -> Self::KeyType<'_> {

@@ -20,7 +20,7 @@ use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::StorageIterator;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
-use crate::mem_table::{MemTable, MemTableIterator};
+use crate::mem_table::{map_bound, MemTable, MemTableIterator};
 use crate::mvcc::LsmMvccInner;
 use crate::table::SsTable;
 
@@ -432,6 +432,9 @@ impl LsmStorageInner {
         }
         let memtable_iter = MergeIterator::create(memtable_iters);
 
-        Ok(FusedIterator::new(LsmIterator::new(memtable_iter)?))
+        Ok(FusedIterator::new(LsmIterator::new(
+            memtable_iter,
+            map_bound(_upper),
+        )?))
     }
 }
