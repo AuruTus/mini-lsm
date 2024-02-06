@@ -9,13 +9,13 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{bail, Ok, Result};
 pub use builder::SsTableBuilder;
-use bytes::Buf;
+use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
 
-use crate::block::Block;
-use crate::key::{KeyBytes, KeySlice};
+use crate::block::{self, Block};
+use crate::key::{KeyBytes, KeySlice, KeyVec};
 use crate::lsm_storage::BlockCache;
 
 use self::bloom::Bloom;
@@ -31,20 +31,68 @@ pub struct BlockMeta {
 }
 
 impl BlockMeta {
+    const SIZEOF_BLOCK_META: usize = std::mem::size_of::<Self>();
+
+    pub fn new(first_key: KeyVec, last_key: KeyVec) -> Self {
+        Self {
+            offset: 0,
+            first_key: first_key.into_key_bytes(),
+            last_key: last_key.into_key_bytes(),
+        }
+    }
+
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
-    pub fn encode_block_meta(
-        block_meta: &[BlockMeta],
-        #[allow(clippy::ptr_arg)] // remove this allow after you finish
-        buf: &mut Vec<u8>,
-    ) {
-        unimplemented!()
+    pub fn encode_block_meta(block_meta: &[BlockMeta], buf: &mut Vec<u8>) {
+        let mut estimated_size = std::mem::size_of::<u32>();
+        for meta in block_meta {
+            estimated_size += std::mem::size_of::<u32>(); /* offset size */
+            estimated_size += std::mem::size_of::<u16>(); /* first key length size */
+            estimated_size += meta.first_key.len(); /* fist key length */
+            estimated_size += std::mem::size_of::<u16>(); /* last key lengrh size */
+            estimated_size += meta.last_key.len(); /* last key length */
+        }
+        estimated_size += std::mem::size_of::<u16>();
+
+        buf.reserve(estimated_size);
+        let original_len = buf.len();
+        buf.put_u32(block_meta.len() as u32);
+        for meta in block_meta {
+            buf.put_u32(meta.offset as u32); /* offset */
+            buf.put_u16(meta.first_key.len() as u16); /* first key length */
+            buf.put_slice(meta.first_key.raw_ref()); /* first key */
+            buf.put_u16(meta.last_key.len() as u16); /* last key length */
+            buf.put_slice(meta.last_key.raw_ref()); /* last key */
+        }
+        buf.put_u32(crc32fast::hash(&buf[original_len + 4..])); /* checksum */
+        assert_eq!(estimated_size, buf.len() - original_len);
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(buf: impl Buf) -> Vec<BlockMeta> {
-        unimplemented!()
+    pub fn decode_block_meta(mut buf: &[u8]) -> Result<Vec<BlockMeta>> {
+        let mut block_meta = Vec::new();
+        let num = buf.get_u32() as usize;
+        let checksum = crc32fast::hash(&buf[..buf.remaining() - 4]);
+
+        for _ in 0..num {
+            let offset = buf.get_u32() as usize;
+            let first_key_len = buf.get_u16() as usize;
+            let first_key = KeyBytes::from_bytes(buf.copy_to_bytes(first_key_len));
+            let last_key_len = buf.get_u16() as usize;
+            let last_key = KeyBytes::from_bytes(buf.copy_to_bytes(last_key_len));
+            block_meta.push(BlockMeta {
+                offset,
+                first_key,
+                last_key,
+            });
+        }
+
+        if buf.get_u32() != checksum {
+            bail!("meta checksum mismatched!");
+        }
+
+        Ok(block_meta)
     }
 }
 
