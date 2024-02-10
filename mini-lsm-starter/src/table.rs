@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 pub(crate) mod bloom;
 mod builder;
 mod iterator;
@@ -9,12 +6,12 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{bail, Ok, Result};
+use anyhow::{anyhow, bail, Ok, Result};
 pub use builder::SsTableBuilder;
 use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
 
-use crate::block::{self, Block};
+use crate::block::Block;
 use crate::key::{KeyBytes, KeySlice, KeyVec};
 use crate::lsm_storage::BlockCache;
 
@@ -53,7 +50,7 @@ impl BlockMeta {
             estimated_size += std::mem::size_of::<u16>(); /* last key lengrh size */
             estimated_size += meta.last_key.len(); /* last key length */
         }
-        estimated_size += std::mem::size_of::<u16>();
+        estimated_size += std::mem::size_of::<u32>();
 
         buf.reserve(estimated_size);
         let original_len = buf.len();
@@ -156,7 +153,30 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        unimplemented!()
+        let len = file.size();
+        // bloom filter
+        let raw_bloom_offset = file.read(len - 4, 4)?;
+        let bloom_offset = (&raw_bloom_offset[..]).get_u32() as u64;
+        let raw_bloom = file.read(bloom_offset, len - 4 - bloom_offset)?;
+        let bloom_filter = Bloom::decode(&raw_bloom)?;
+
+        // block meta
+        let raw_meta_offset = file.read(bloom_offset - 4, 4)?;
+        let block_meta_offset = (&raw_meta_offset[..]).get_u32() as u64;
+        let raw_meta = file.read(block_meta_offset, bloom_offset - 4 - block_meta_offset)?;
+        let block_meta = BlockMeta::decode_block_meta(&raw_meta[..])?;
+
+        Ok(Self {
+            first_key: block_meta.first().unwrap().first_key.clone(),
+            last_key: block_meta.last().unwrap().last_key.clone(),
+            file,
+            block_meta,
+            block_meta_offset: block_meta_offset as usize,
+            id,
+            block_cache,
+            bloom: Some(bloom_filter),
+            max_ts: 0,
+        })
     }
 
     /// Create a mock SST with only first key + last key metadata
@@ -181,19 +201,43 @@ impl SsTable {
 
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        let offset = self.block_meta[block_idx].offset;
+        let offset_end = self
+            .block_meta
+            .get(block_idx + 1)
+            .map_or(self.block_meta_offset, |x| x.offset);
+        let block_len = offset_end - offset - 4;
+        let block_data_with_checksum: Vec<u8> = self
+            .file
+            .read(offset as u64, (offset_end - offset) as u64)?;
+
+        let block_data = &block_data_with_checksum[..block_len];
+        let checksum = (&block_data_with_checksum[block_len..]).get_u32();
+        if checksum != crc32fast::hash(block_data) {
+            bail!("block checksum mismatched");
+        }
+        Ok(Arc::new(Block::decode(block_data)))
     }
 
     /// Read a block from disk, with block cache. (Day 4)
     pub fn read_block_cached(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        if let Some(ref block_cache) = self.block_cache {
+            let blk = block_cache
+                .try_get_with((self.id, block_idx), || self.read_block(block_idx))
+                .map_err(|e| anyhow!("{}", e))?;
+            Ok(blk)
+        } else {
+            self.read_block(block_idx)
+        }
     }
 
     /// Find the block that may contain `key`.
     /// Note: You may want to make use of the `first_key` stored in `BlockMeta`.
     /// You may also assume the key-value pairs stored in each consecutive block are sorted.
     pub fn find_block_idx(&self, key: KeySlice) -> usize {
-        unimplemented!()
+        self.block_meta
+            .partition_point(|meta| meta.first_key.as_key_slice() <= key)
+            .saturating_sub(1)
     }
 
     /// Get number of data blocks.
