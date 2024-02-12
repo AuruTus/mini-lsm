@@ -284,7 +284,7 @@ impl LsmStorageInner {
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
         let snapshot = {
             let guard = self.state.read();
-            guard.clone()
+            Arc::clone(&guard)
         };
 
         if let Some(val) = snapshot.memtable.get(_key) {
