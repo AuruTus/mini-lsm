@@ -366,7 +366,7 @@ impl LsmStorageInner {
         let l0_iter = MergeIterator::create(l0_iters);
 
         let iter = l0_iter;
-        if iter.is_valid() && iter.key().raw_ref() == _key && iter.value().is_empty() {
+        if iter.is_valid() && iter.key().raw_ref() == _key && !iter.value().is_empty() {
             return Ok(Some(Bytes::copy_from_slice(iter.value())));
         }
         Ok(None)
