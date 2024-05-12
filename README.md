@@ -81,6 +81,8 @@ We have 3 weeks + 1 extra week (in progress) for this tutorial.
 * Week 3: Multi-Version Concurrency Control
 * The Extra Week / Rest of Your Life: Optimizations (unlikely to be available in 2024...)
 
+![Tutorial Roadmap](./mini-lsm-book/src/lsm-tutorial/00-full-overview.svg)
+
 | Week + Chapter | Topic                                                       |
 | -------------- | ----------------------------------------------------------- |
 | 1.1            | Memtable                                                    |
@@ -107,4 +109,4 @@ We have 3 weeks + 1 extra week (in progress) for this tutorial.
 
 ## License
 
-The Mini-LSM starter code and solution are under Apache 2.0 license. The author reserves the full copyright of the tutorial materials (markdown files and figures).
+The Mini-LSM starter code and solution are under [Apache 2.0 license](LICENSE). The author reserves the full copyright of the tutorial materials (markdown files and figures).
